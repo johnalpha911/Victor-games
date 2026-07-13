@@ -1,12 +1,23 @@
 # Hardware notes
 
-Everything below was measured on a real Vector, served
-by WirePod on a Raspberry Pi 3B+, over the course of building the games in
-this repo. Some of it is touched on in the official
-SDK docs or scattered across forum threads and wikis, but we couldn't find
-most of it written down anywhere in one place — it was mainly arrived at
-by probing the robot directly and watching what actually happened, often
-after an assumption that seemed reasonable turned out to be wrong.
+Everything below was measured on a real Vector, served by WirePod on a
+Raspberry Pi 3B+, over the course of building the games in this repo — it
+was arrived at by probing the robot directly and watching what actually
+happened, often after an assumption that seemed reasonable turned out to
+be wrong.
+
+After the fact, every claim here was **cross-checked against Randall Maas's
+[Anki Vector Technical Reference Manual](https://randym32.github.io/Vector-TRM.pdf)**
+(2021-02-14, 543 pages) — an extraordinary reverse-engineering effort, known
+in the community as the "Vector Bible," that documents Vector's electronics,
+firmware, and protocols in far more depth than anything Anki published. There's
+a companion wiki at
+[Anki.Vector.Documentation](https://randym32.github.io/Anki.Vector.Documentation/).
+
+Where the TRM confirms a finding, it's noted. Where it *corrected* us, that's
+noted too, because a couple of things we were confident about turned out to be
+wrong. If you're doing serious Vector work, read the TRM first — it would have
+saved us most of a day.
 
 If you're building your own Vector project and something in here saves you
 a day, that's exactly what it's for.
@@ -85,19 +96,53 @@ clip a user had verified working on hardware (`anim_rtpickup_putdown_03`)
 wasn't in that list at all. Treat any such list as useful for finding
 candidate names, not as authoritative for ruling a clip *out*.
 
-## The front ToF sensor floors at 30mm
+## The front ToF sensor floors at 30mm — and the lift can block it
 
 Vector's proximity sensor cannot report a distance closer than
 approximately 30mm — verified by sliding a cube in by hand while polling
-continuously (see the pattern in `feeding.py`'s approach logic) and
-watching the reading flatten out and refuse to go lower, however close the
-object actually got.
+continuously and watching the reading flatten out and refuse to go lower,
+however close the object actually got.
+
+**The TRM confirms this exactly, and explains why.** The sensor is an
+STMicroelectronics **VL53L0x**, and per the TRM it "has a usable range 30mm
+to 1200mm away (max useful range closer to 300mm for Vector) with a field
+of view of 25 degrees." The mechanism:
+
+> "Items too close return the pulse faster than the sensor can measure."
+
+So this is a genuine hardware floor, not a firmware filter — the photons
+come back before the timing circuit can resolve them. There is no
+workaround.
 
 Practically: any behaviour that needs Vector to close the final gap onto
 an object (nesting his lift onto a cube, for instance) cannot rely on the
 sensor for that last stretch. It has to be driven **blind**, on dead
 reckoning, for a fixed short distance past wherever the sensor bottoms
 out.
+
+### `is_lift_in_fov` — the flag you should be checking
+
+This one we missed entirely, and the TRM caught it. **The lift can block
+the ToF sensor**, and the SDK tells you when it does. From `ProxData`:
+
+| Field | Meaning |
+|---|---|
+| `distance_mm` | the distance to the object |
+| `found_object` | the sensor detected something in valid range |
+| `is_lift_in_fov` | **the lift (or a carried object) is blocking the sensor** |
+| `signal_quality` | likelihood the reading is a real solid surface |
+| `unobstructed` | nothing detected all the way to max range |
+
+The TRM is explicit that this is not a hypothetical:
+
+> "The sensor can be blocked by the arms, if they are in just the right
+> lowered position — such as approaching an object and docking with it."
+
+Which is *precisely* what `feeding.py` does: drive toward the cube with the
+lift down, reading the ToF, then dock onto it. If your approach logic reads
+`distance_mm` without checking `is_lift_in_fov`, you may be steering off a
+reading of your own arm. The TRM's own advice is to track "the most recent
+proximity data which did not have the lift blocking."
 
 ## The camera can only identify the cube at a distance
 
@@ -123,37 +168,67 @@ full distance range on its own.
 a stable continuous signal; poll it, don't assume one true reading means
 it'll stay true next frame.
 
-## Hand-moving the lift only gets you a few millimetres — that's firmware, not gearing
+## Why the lift fights you when you move it by hand
 
-It's tempting to assume the lift resists being moved by hand because it's
-mechanically geared, but that's not what's actually going on: the
-resistance is the firmware limiting how far the arm can be displaced by an
-outside force, not a physical gear ratio stopping your hand. In practice
-you can nudge it a small number of millimetres before it holds firm, and
-it doesn't stay wherever you push it to.
+Hand-move the lift and you get a few millimetres before it holds firm, and
+it won't stay where you put it. We first assumed mechanical gearing, then
+assumed a firmware limit on displacement. **Both were wrong**, and the TRM
+has the real answer — it's the motor control loop actively resisting you.
 
-This matters for any "human moves the lift as a gesture" design (used in
-`hot_potato.py` and `vector_challenge.py`). The gesture can't be "raise it
-and lower it" — it has to be "nudge it, at all, twice," with each nudge
-detected as a small delta against a re-established baseline, not an
-absolute position.
+Two things are happening at once:
 
-`lift_height_mm` itself is a precise, live encoder reading in general —
-Anki built it for things like `set_lift_height()` and animation playback,
-not with hand-nudging in mind, but it's accurate regardless of what's
-moving the arm. It's specifically the *firmware's willingness to let a
-human displace it by hand* that's small, not any limit on how precisely
-the reading tracks that displacement. That precision is what makes the
-nudge-based gesture detection work: even a few millimetres of movement
-shows up cleanly in the number.
+**The PID controller fights back.** The TRM is blunt about it:
+
+> "the PID controller violently fights your attempt to pull the lift,
+> smacking your fingers and oscillating and otherwise causing trouble. The
+> PID controller is pretty feisty, because it has to operate across a huge
+> range of forces — between flipping or lifting the robot's entire weight
+> and delicately setting down or lifting cubes without flinging them."
+
+**And the stall protection never fully lets go.** When the body-board
+detects a stall it throttles the current to protect the motor — but
+crucially, it keeps pushing:
+
+> "It never turns the power down to 0, since it doesn't have to. All 4
+> motors can push continuously (gently) without stalling. So if you drive a
+> motor toward the limit but someone is pulling on it the other way, it
+> might push hard at first, then quickly 'relax' to a voltage that's safe
+> for continuous use, but never stop pushing just in case you let go."
+
+So the resistance you feel is a live control loop, not a mechanism. That
+also explains why `stop_all_motors()` is what actually frees the arm (see
+below) — you're not releasing a brake, you're cancelling a target.
+
+**The motors *can* be genuinely unlocked.** This is the part we never
+found: the TRM says the firmware supports it, and even uses it as an input
+method.
+
+> "The motors can also be 'unlocked' — allowed to be spun by external
+> forces. This allows a person to raise and lower the lift, as well as raise
+> and lower the head. Both of these are used as inputs to enter diagnostic
+> modes. The software control loops can also detect when a person is playing
+> with Vector's lift (or head or tracks), and then unlock the motors."
+
+We never worked out how to trigger that unlock from the SDK, so
+`hot_potato.py` works *with* the resistance rather than removing it: the
+gesture is "nudge it, at all, twice" — each nudge a small delta against a
+re-established baseline, never an absolute position, and never a
+raise-and-hold. If you find the unlock, a much nicer gesture becomes
+possible.
+
+`lift_height_mm` itself is a precise, live encoder reading regardless of
+what's moving the arm — that precision is what makes nudge detection work
+at all, since even a couple of millimetres shows up cleanly.
 
 ## `set_lift_height()` cannot deliver force; `set_lift_motor()` can
 
-`set_lift_height()` (and `set_head_angle()`) are **position controllers**.
-Given an obstruction, they plan a smooth trajectory towards the target and,
-on meeting resistance, essentially give up gracefully rather than pushing
-through. Cranking `accel`/`max_speed` barely changes this — going from 10
-to 20 shaved barely a tenth of a second off an otherwise-identical motion.
+`set_lift_height()` (and `set_head_angle()`) are **position controllers** —
+confirmed by the TRM: "The lift and head motors are position-controlled. The
+motors can be commanded to travel to an encoder position at a speed (given in
+radians/sec)." Given an obstruction, they plan a smooth trajectory towards the
+target and, on meeting resistance, essentially give up gracefully rather than
+pushing through. Cranking `accel`/`max_speed` barely changes this — going from
+10 to 20 shaved barely a tenth of a second off an otherwise-identical motion.
 
 `robot.motors.set_lift_motor(speed)` (and the equivalent for the head) is
 **direct and open-loop**: positive is up, negative is down, in rad/s, and
@@ -165,16 +240,47 @@ have to close the loop yourself: poll the live angle/height and cut the
 motor the instant it crosses your target. Left uncorrected, an open-loop
 return stroke will happily sail straight past where you meant it to stop.
 
+### Burn-out protection (and why you can stall a motor without fear)
+
+The body-board watches the encoders on all four motors and throttles the duty
+cycle on any channel that stalls. Per the TRM, you have a lot more headroom
+than you'd think:
+
+> "those motors can't overheat instantaneously — it takes at least 15 seconds
+> of being stalled at full power before you risk permanent damage. The
+> firmware in the body board watches the encoders on all 4 motors, and turns
+> down the power on stalled channels."
+
+So a brief hard stall — which is exactly what the wheelie and the overpush
+are — is well within safe limits. Just don't hold one indefinitely.
+
 ### The wheelie
 
-There is no animation clip anywhere on this Vector for a wheelie. It's
-built entirely from `set_lift_motor()`: wind the lift up briefly, then
-slam it down hard and hold. Because the lift can't physically go any
-lower than the cube beneath it, the downward force has nowhere to go
-except into the chassis — and the chassis lifts instead. Verified 7/7
-successful attempts using the motor-driven version; the position-controller
-version needed several failed attempts first, because a stall-based
-"try harder" escalation had to kick in before it built enough force.
+**Correction: Vector has a built-in wheelie, and we didn't know.** The TRM
+documents `PopAWheelieRequest` as a first-class SDK behaviour — "Tell Vector
+to 'pop a wheelie' using his cube. Vector will approach the cube, then push
+down on it with his lift." It takes an approach angle, a motion profile, and
+a retry count. Our note used to claim no wheelie existed anywhere on the
+robot. That was simply wrong, and it's a good lesson in checking the
+reference before declaring something absent.
+
+There is still no wheelie *animation clip* — the built-in is a behaviour,
+not a clip — and the mechanism we worked out from scratch turns out to be
+exactly the one Anki used: push down on the cube with the lift.
+
+**The hand-rolled version is still the right call for `feeding.py`,
+though**, for one specific reason: `pop_a_wheelie()` makes Vector *approach
+and dock with the cube himself* as part of the action. In feeding he's
+already nested on the cube — an autonomous re-approach would be wrong, slow,
+and visually jarring mid-animation. So we build it directly:
+
+Wind the lift up briefly with `set_lift_motor()`, then slam it down hard and
+hold. Because the lift can't go lower than the cube beneath it, the downward
+force has nowhere to go except into the chassis — and the chassis lifts
+instead. Verified 7/7 successful attempts with the motor-driven version; the
+`set_lift_height()` version needed several failed attempts first, because
+the stall-based torque escalation (see the burn-out protection note above)
+had to kick in before it built enough force.
 
 **The overpush and the wheelie are the same motion at different
 intensities.** Discovered by accident: an "overpush" (lift jabbing down
@@ -210,11 +316,39 @@ Playing an animation clip or trigger that involves the lift or head does
 not automatically release those motors afterwards — they can be left
 actively held at whatever position the animation ended on.
 `set_lift_motor(0)` alone does not clear that hold; you need
-`robot.motors.stop_all_motors()` to genuinely let go of everything. This
-matters anywhere you need a human to be able to move the arm right after
-an animation has played — check it's actually released before waiting on
-a gesture. (And remember the arm only ever accepts a small manual
-displacement in the first place — see above.)
+`robot.motors.stop_all_motors()` to genuinely let go of everything.
+
+This is the same mechanism as the hand-resistance above: the motor isn't
+"stuck," it's being *commanded* to a position, and the stall protection
+throttles the power without ever releasing it — per the TRM, "This lets the
+head and lift hold position." Setting motor speed to zero doesn't cancel a
+position target; stopping all motors does.
+
+It matters anywhere you need a human to be able to move the arm right after
+an animation has played — check it's actually released before waiting on a
+gesture.
+
+## The serial number is an identifier, not a credential
+
+Worth knowing if you're publishing Vector code, since every script here takes
+a `--serial` argument and it's easy to leave a real one in an example.
+
+Per the TRM, Vector's auth chain is: **account name/password → session token
+(issued by Anki's server) → client token**, with the client token stored on
+the robot at `/data/vic-gateway/token-hashes.json` and reusable indefinitely.
+The real secrets are that client token plus the device certificate and private
+key (`AnkiRobotDeviceCert.pem` / `AnkiRobotDeviceKeys.pem`).
+
+The serial (ESN) is none of those. It's an identifier — it appears as the
+certificate CommonName in the form `vic:<serial>`, also called the "thing id"
+— and it's *printed on the underside of the robot*. It authenticates nothing
+on its own.
+
+So a leaked serial is closer to a leaked model number than a leaked password.
+Still worth scrubbing from public examples out of basic hygiene (use
+`YOUR_SERIAL`, or WirePod's `!botSerial` substitution), but it isn't the
+emergency it feels like. The things that would genuinely matter are your certs,
+keys, and `sdk_config.ini` — keep those out of git.
 
 ## The skill file isn't locked down on purpose
 
