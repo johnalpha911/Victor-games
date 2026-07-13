@@ -60,7 +60,7 @@ aren't in any official animation.
 
 - A Vector robot served by WirePod — running on a Pi (or other machine)
   alongside it, not on Vector itself. Vector can be on stock production
-  firmware or any WirePod-compatible CFW (e.g. 1.6 Rebuild); no
+  firmware or any WirePod-compatible CFW (e.g. wire os); no
   OSKR/jailbreak is required either way. Vector's own firmware just needs
   to be 1.8 or 2.0.1 — older firmware isn't supported by WirePod.
 - Python 3, with the **WirePod fork of the Vector SDK** installed. The
