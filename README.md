@@ -147,8 +147,7 @@ python3 feeding.py --serial YOUR_SERIAL -r           # always finish with the HE
 Without `-w`/`-o`/`-r`, he picks one of the three at random once he's eaten
 too much. Each is a genuinely physical reaction — see
 [HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md#the-wheelie) for how the wheelie
-in particular works, since there's no animation clip for it anywhere on the
-robot.
+in particular works.
 
 ### `hot_potato.py` — party game, 2+ players
 
@@ -174,12 +173,28 @@ python3 hot_potato.py --serial YOUR_SERIAL --min-s 20 --max-s 45
 
 The cube flashes mismatched colours on each corner, then all four snap to
 the same colour — that's your cue to tap. Fast enough and it's your point;
-too slow, no tap, or tapping before the match, and it's his. Hold his back
-sensor for 1–5 seconds to end the session; he plays a red spinner or a
-rainbow flash depending on who won overall.
+too slow, no tap, or tapping before the match, and it's his. At the end he
+plays a red spinner or a rainbow flash depending on who won, then reads out
+the final score.
+
+**Two modes, pet-cycled at the start** (same as keepaway and sleepy vector):
+
+- **First to 10** — the default. The game ends on score.
+- **Infinite** — runs until you stop it. **Hold his back for 1–5 seconds**
+  to end it, and he'll tot up the score.
+
+The back sensor is a quit button **in infinite mode only**. In first-to-N it
+isn't polled at all, so holding his back does nothing — the game ends when
+someone hits the target, not when you say so.
+
+Vector narrates the rules himself once the mode is locked in, and the last
+line changes with the mode: in first-to-N he names the target score; in
+infinite he explains how to quit, since that's the only way it ever ends.
+Pet him during the narration to skip the rest of it.
 
 ```bash
 python3 reaction_game.py --serial YOUR_SERIAL
+python3 reaction_game.py --serial YOUR_SERIAL --win-score 5   # first to 5 instead
 python3 reaction_game.py --selftest
 ```
 
@@ -273,9 +288,7 @@ hand-editing JSON: go to `http://<your-wirepod-host>:8080`, find the
 same fields shown below and writes them into
 `~/wire-pod/chipper/customIntents.json` for you.
 
-If you'd rather edit that file directly, an entry looks like this (replace
-`YOURUSER` with whatever user the scripts actually live under, and swap in
-your own serial):
+If you'd rather edit that file directly, an entry looks like this:
 
 ```json
 {
@@ -283,9 +296,15 @@ your own serial):
   "utterances": ["let's play keepaway", "play keepaway"],
   "intent": "intent_custom_playkeepaway",
   "exec": "path/to/python",
-  "execargs": ["Path/to/script.py","--serial","!botSerial"]
+  "execargs": ["path/to/script.py", "--serial", "!botSerial"]
 }
 ```
+
+`path/to/python` and `path/to/script.py` are exactly that — fill in wherever
+Python and your copy of this repo actually live. `!botSerial` is WirePod's
+own substitution: it fills in the serial of whichever Vector triggered the
+intent, so this works unmodified even with more than one bot registered, and
+you never have to put a real serial into a config file.
 
 **Watch the `execargs` strings for leading spaces.** WirePod passes each
 array element straight through as an argv entry, and a stray `" --serial"`

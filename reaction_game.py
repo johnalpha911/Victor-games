@@ -17,11 +17,22 @@ FLOW
        * too slow / no tap                  -> VECTOR's point, cube flashes RED,
                                                Vector plays BlackJack_VictorBlackJackWin
        * tap TOO EARLY (before match)       -> VECTOR's point (jumped the gun)
-  6. To END: hold Vector's back sensor for 1-5 seconds, then release.
-  7. Final effect (once):
+  6. Final effect (once), then he announces the score:
        * Vector wins the game  -> RED SPINNER  (one corner chases around, red)
        * Player wins the game  -> RAINBOW FLASH (all four flash rainbow together)
        * Tie -> treated as Vector's win (red spinner)
+
+MODES (pet-cycle at the very start, like keepaway / sleepy vector):
+  "First to 10" (default)  |  "Infinite"
+
+  The BACK SENSOR IS A QUIT BUTTON IN INFINITE MODE ONLY. In first-to-N the game
+  ends on score, so holding his back does nothing — the sensor isn't polled.
+  Override the target with --win-score N.
+
+RULES: after the mode is picked, Vector narrates the rules himself, and the LAST
+  LINE DEPENDS ON THE MODE — in first-to-N he names the target; in infinite he
+  explains how to quit, since that's the only way the game ever ends. Pet him at
+  any point to skip the rest of the explanation.
 
 SELF-TEST (no robot):  python3 reaction_game.py --selftest
 """
@@ -46,6 +57,53 @@ def judge_round(tapped, reaction_time, reaction_limit, tapped_too_early):
 
 def session_winner(player_score, vector_score):
     return "player" if player_score > vector_score else "vector"
+
+
+def game_over(player_score, vector_score, win_score):
+    """First to win_score wins. In infinite mode (win_score None) the game only
+    ends on a back-sensor hold."""
+    if win_score is None:
+        return False
+    return player_score >= win_score or vector_score >= win_score
+
+
+def points(n):
+    """English pluralisation: 1 -> 'point', everything else (including 0) ->
+    'points'. Stops Vector saying 'You got 1 points'."""
+    return "1 point" if n == 1 else f"{n} points"
+
+
+def toggle_mode(mode):
+    return "infinite" if mode == "first_to" else "first_to"
+
+
+def mode_name(mode, win_score):
+    return f"First to {win_score}" if mode == "first_to" else "Infinite"
+
+
+def end_line(player_score, vector_score):
+    result = "I won" if session_winner(player_score, vector_score) == "vector" \
+        else "I lost"
+    return (f"You got {points(player_score)}. "
+            f"I got {points(vector_score)}. {result}.")
+
+
+def rules_lines(mode, win_score, reaction_limit=1.0):
+    """The rules Vector narrates. The last line DEPENDS ON THE MODE — in
+    first-to-N he says the target; in infinite he explains how to quit, since
+    that's the only way the game ever ends."""
+    lines = [
+        "Watch my cube.",
+        "When all four corners turn the same color, tap it.",
+        "Tap fast. You only get one second.",
+        "Do not tap early. If you tap before they match, I get the point.",
+    ]
+    if mode == "first_to":
+        lines.append(f"First to {win_score} wins.")
+    else:
+        lines.append("This game goes forever. "
+                     "Hold my back to stop, and I will count up the score.")
+    return lines
 
 
 def pick_trigger(available, candidates):
@@ -129,6 +187,41 @@ def _run_selftest():
     ok = all(len({id(c) for c in different_corner_colors(palette, rng)}) > 1 for _ in range(200))
     check("corner colors never all-identical (200x)", ok)
 
+    # first-to-N termination
+    check("game over: player hits 10", game_over(10, 3, 10) is True)
+    check("game over: vector hits 10", game_over(4, 10, 10) is True)
+    check("game not over at 9-9", game_over(9, 9, 10) is False)
+    check("game not over at 0-0", game_over(0, 0, 10) is False)
+    check("infinite never ends on score", game_over(99, 99, None) is False)
+
+    # pluralisation: 1 singular, 0 and 2+ plural
+    check("points(0) -> '0 points'", points(0) == "0 points")
+    check("points(1) -> '1 point'", points(1) == "1 point")
+    check("points(2) -> '2 points'", points(2) == "2 points")
+    check("end line singular", "You got 1 point." in end_line(1, 10))
+    check("end line zero", "You got 0 points." in end_line(0, 10))
+    check("no '1 points' anywhere", "1 points" not in end_line(1, 1))
+    check("end line win/lose", "I won" in end_line(3, 10)
+          and "I lost" in end_line(10, 3))
+
+    # mode toggle
+    check("toggle first_to -> infinite", toggle_mode("first_to") == "infinite")
+    check("toggle infinite -> first_to", toggle_mode("infinite") == "first_to")
+    check("double toggle identity", toggle_mode(toggle_mode("first_to")) == "first_to")
+    check("mode name first_to", mode_name("first_to", 10) == "First to 10")
+    check("mode name infinite", mode_name("infinite", 10) == "Infinite")
+
+    # rules are MODE-DEPENDENT: first_to names the target, infinite explains quit
+    ft = rules_lines("first_to", 10)
+    inf = rules_lines("infinite", 10)
+    check("first_to rules name the target", any("First to 10" in ln for ln in ft))
+    check("first_to rules never mention quitting",
+          not any("stop" in ln.lower() for ln in ft))
+    check("infinite rules explain the quit", any("Hold my back" in ln for ln in inf))
+    check("infinite rules never name a target",
+          not any("First to" in ln for ln in inf))
+    check("both modes share the core rules", ft[:4] == inf[:4])
+
     print()
     if failures:
         print(f"SELF-TEST FAILED: {failures}")
@@ -150,7 +243,15 @@ ROUND_PAUSE = 0.5
 ANIM_TIMEOUT_S = 20.0
 POLL_S = 0.02
 
-# stop-hold window
+# scoring
+WIN_SCORE = 10                # first-to-10 (default mode)
+
+# mode select (pet-cycle at the very start, like keepaway / sleepy vector)
+MODE_SETTLE_S = 3.0           # no pet for this long -> the mode locks in
+MODE_PET_MAX_S = 5.0
+
+# stop-hold window — INFINITE MODE ONLY. In first-to-N the game ends on score,
+# so the back sensor is not a quit button and holding it does nothing.
 STOP_MIN_HOLD_S = 1.0
 STOP_MAX_HOLD_S = 5.0
 
@@ -283,7 +384,10 @@ def _touch_held(robot):
 def _check_stop_hold(robot):
     """If the back sensor is held for at least STOP_MIN_HOLD_S seconds, that's a
     stop. Fires as soon as the threshold is crossed (no need to release within a
-    window), then waits for release so it doesn't double-trigger. Reliable."""
+    window), then waits for release so it doesn't double-trigger. Reliable.
+
+    INFINITE MODE ONLY — callers must not call this in first-to-N, where the
+    game ends on score and the back sensor is not a quit button."""
     if not _touch_held(robot):
         return False
     start = time.monotonic()
@@ -295,6 +399,64 @@ def _check_stop_hold(robot):
             return True
         time.sleep(0.03)
     return False  # released before reaching the minimum hold
+
+
+def _wait_pet_release(robot, timeout=MODE_PET_MAX_S):
+    """Consume a pet — wait for the finger to come off. Without this the same
+    touch leaks into the next poll and reads as a second, phantom pet."""
+    end = time.monotonic() + timeout
+    while _touch_held(robot) and time.monotonic() < end:
+        time.sleep(0.05)
+
+
+def _say_skippable(robot, text):
+    """Say one line while watching the back sensor. Returns True if the player
+    petted during it (= skip the rest of the narration). The current line
+    finishes speaking — audio can't be cut mid-word — but the rest is dropped."""
+    try:
+        fut = robot.behavior.say_text(text)
+    except Exception:  # noqa: BLE001
+        return _touch_held(robot)
+    petted = False
+    end = time.monotonic() + 15
+    while time.monotonic() < end:
+        if _touch_held(robot):
+            petted = True
+        if hasattr(fut, "done") and fut.done():
+            break
+        time.sleep(0.05)
+    _wait_future(fut, timeout=5)
+    return petted
+
+
+def _narrate_rules(robot, mode, win_score):
+    """Read the rules out, pet to skip. Mode-dependent: in infinite he explains
+    how to quit instead of naming a target score."""
+    for line in rules_lines(mode, win_score, REACTION_LIMIT):
+        if _say_skippable(robot, line):
+            _wait_pet_release(robot)     # CONSUME it, or it leaks into the game
+            print("  (rules skipped)")
+            return
+
+
+def _select_mode(robot, win_score=WIN_SCORE):
+    """Pet-cycle the mode, exactly like keepaway. Locks in after MODE_SETTLE_S
+    with no pet. Default is first-to-N."""
+    mode = "first_to"
+    _say(robot, f"{mode_name(mode, win_score)}.")
+    while True:
+        end = time.monotonic() + MODE_SETTLE_S
+        petted = False
+        while time.monotonic() < end:
+            if _touch_held(robot):
+                _wait_pet_release(robot)
+                petted = True
+                break
+            time.sleep(0.05)
+        if not petted:
+            return mode
+        mode = toggle_mode(mode)
+        _say(robot, f"{mode_name(mode, win_score)}.")
 
 
 def _drive_off_charger_if_needed(robot, anims):
@@ -426,8 +588,6 @@ def _rainbow_flash(cube, lights_mod):
             pass
 
 
-
-
 def _ensure_cube_connected(robot, cube):
     """If the cube dropped its BT connection mid-game, try to reconnect so the
     game recovers instead of breaking. Returns the (possibly new) cube object."""
@@ -448,11 +608,11 @@ def _ensure_cube_connected(robot, cube):
     return cube
 
 
+def _run_round(robot, cube, anims, palette, rng, infinite):
+    """One round. Returns 'player', 'vector', or 'quit'.
 
-
-
-def _run_round(robot, cube, anims, palette, rng):
-    """One round. Returns 'player', 'vector', or 'quit'."""
+    `infinite` gates the quit-hold: in first-to-N the game ends on score, so the
+    back sensor does nothing and holding it must NOT abort the round."""
     tap_marker = cube.last_tapped_time or 0.0
     wait_before = rng.uniform(MIN_WAIT_BEFORE_MATCH, MAX_WAIT_BEFORE_MATCH)
     phase_end = time.monotonic() + wait_before
@@ -460,7 +620,7 @@ def _run_round(robot, cube, anims, palette, rng):
 
     # pre-match: mismatched colors; tapping now = too early
     while time.monotonic() < phase_end:
-        if _check_stop_hold(robot):
+        if infinite and _check_stop_hold(robot):
             return "quit"
         now = time.monotonic()
         if now >= next_flash:
@@ -484,7 +644,7 @@ def _run_round(robot, cube, anims, palette, rng):
     start = time.monotonic()
     deadline = start + REACTION_LIMIT
     while time.monotonic() < deadline:
-        if _check_stop_hold(robot):
+        if infinite and _check_stop_hold(robot):
             return "quit"
         if (cube.last_tapped_time or 0.0) > tap_marker:
             return "player" if (time.monotonic() - start) <= REACTION_LIMIT else "vector"
@@ -492,7 +652,7 @@ def _run_round(robot, cube, anims, palette, rng):
     return "vector"  # too slow
 
 
-def play_reaction_game(serial=None):
+def play_reaction_game(serial=None, win_score=WIN_SCORE):
     import anki_vector
     from anki_vector import lights
 
@@ -506,8 +666,18 @@ def play_reaction_game(serial=None):
         print("Connected.\n")
         anims = _resolve_anims(robot)
 
-        _say(robot, "Tap and hold my back to stop.")
         _drive_off_charger_if_needed(robot, anims)
+
+        # --- MODE SELECT (pet-cycle, exactly like keepaway / sleepy vector) ---
+        _say(robot, "Pet my back to change the mode.")
+        mode = _select_mode(robot, win_score)
+        infinite = (mode == "infinite")
+        target = win_score
+        win_score_or_none = None if infinite else target
+        print(f"Mode locked: {mode_name(mode, target)}\n")
+
+        # --- RULES (mode-dependent, pet to skip) ---
+        _narrate_rules(robot, mode, target)
 
         _say(robot, "Please place my cube in front of me.")
         cube = _connect_with_animations(robot, anims)
@@ -523,67 +693,82 @@ def play_reaction_game(serial=None):
 
         try:
             while True:
-                if _check_stop_hold(robot):
+                # The back sensor is a quit button in INFINITE ONLY. In
+                # first-to-N the game ends on score, so we never poll it here.
+                if infinite and _check_stop_hold(robot):
                     break
 
                 cube = _ensure_cube_connected(robot, cube)
                 round_index += 1
-                result = _run_round(robot, cube, anims, palette, rng)
+                result = _run_round(robot, cube, anims, palette, rng, infinite)
 
                 if result == "quit":
                     break
                 elif result == "player":
                     player_score += 1
-                    print(f"Round {round_index}: You tapped in time! (You {player_score} / Vector {vector_score})")
-                    _flash_cube(cube, lights.green_light, ROUND_FLASH_TIME)  # green = you won round
+                    print(f"Round {round_index}: You tapped in time! "
+                          f"(You {player_score} / Vector {vector_score})")
+                    _flash_cube(cube, lights.green_light, ROUND_FLASH_TIME)
                     _play(robot, anims, "vector_lose_round", wait=True)
                 else:
                     vector_score += 1
-                    print(f"Round {round_index}: Vector's point! (You {player_score} / Vector {vector_score})")
-                    _flash_cube(cube, lights.red_light, ROUND_FLASH_TIME)   # red = Vector won round
+                    print(f"Round {round_index}: Vector's point! "
+                          f"(You {player_score} / Vector {vector_score})")
+                    _flash_cube(cube, lights.red_light, ROUND_FLASH_TIME)
                     _play(robot, anims, "vector_win_round", wait=True)
 
-                try:
-                    cube.set_lights_off()
-                except Exception:  # noqa: BLE001
-                    pass
+                if game_over(player_score, vector_score, win_score_or_none):
+                    break
+
                 time.sleep(ROUND_PAUSE)
 
-            # --- session end ---
-            winner = session_winner(player_score, vector_score)
-            _say(robot, f"Game over. You scored {player_score}. I scored {vector_score}.")
-            if winner == "player":
-                _play(robot, anims, "session_player_win", wait=False)  # Vector's "I lost" reaction
-                _rainbow_flash(cube, lights)      # player wins -> rainbow
-            else:
-                _play(robot, anims, "session_vector_win", wait=False)  # Vector's victory reaction
-                _red_spinner(cube, lights)        # vector wins (or tie) -> red spinner
-            print(f"\nSession ended. You {player_score} / Vector {vector_score}\n")
-
         except KeyboardInterrupt:
-            print("\nInterrupted — cleaning up.")
-        finally:
-            try:
-                cube.set_lights_off()
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                _wait_future(robot.world.disconnect_cube())
-            except Exception:  # noqa: BLE001
-                pass
+            print("\nInterrupted.")
+
+        winner = session_winner(player_score, vector_score)
+        print(f"\nFinal — You {player_score} | Vector {vector_score} "
+              f"-> {winner.upper()} wins the game.")
+
+        # The GAME animation plays FIRST, then he announces the score — same
+        # order as keepaway.
+        if winner == "vector":
+            _play(robot, anims, "session_vector_win", wait=True)
+            _red_spinner(cube, lights)
+        else:
+            _play(robot, anims, "session_player_win", wait=True)
+            _rainbow_flash(cube, lights)
+
+        _say(robot, end_line(player_score, vector_score))
+
+        try:
+            cube.set_lights_off()
+        except Exception:  # noqa: BLE001
+            pass
+
     return 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Vector cube reaction game.")
+    parser = argparse.ArgumentParser(description="Vector cube reaction game")
     parser.add_argument("--selftest", action="store_true",
-                         help="Run pure game-logic self-test (no robot), then exit.")
-    parser.add_argument("--serial", default=None, help="Vector serial (if multiple bots).")
+                        help="Offline logic self-test, no robot needed")
+    parser.add_argument("--serial", default=None)
+    parser.add_argument("--win-score", type=int, default=WIN_SCORE,
+                        help=f"points needed to win first-to-N mode "
+                             f"(default {WIN_SCORE})")
     args = parser.parse_args()
+
     if args.selftest:
-        sys.exit(_run_selftest())
-    sys.exit(play_reaction_game(serial=args.serial))
+        return _run_selftest()
+
+    try:
+        return play_reaction_game(serial=args.serial, win_score=args.win_score)
+    except Exception:  # noqa: BLE001
+        import traceback
+        print("[FATAL]")
+        traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -191,10 +191,16 @@ def vector_wins(vector_score, player_score):
     return vector_score >= player_score
 
 
+def points(n):
+    """English pluralisation: 1 -> 'point', everything else (including 0) ->
+    'points'. Vector was saying 'You got 1 points'."""
+    return "1 point" if n == 1 else f"{n} points"
+
+
 def end_line(vector_score, player_score):
     result = "I won" if vector_wins(vector_score, player_score) else "I lost"
-    return (f"You got {player_score} points. "
-            f"I got {vector_score} points. {result}.")
+    return (f"You got {points(player_score)}. "
+            f"I got {points(vector_score)}. {result}.")
 
 
 def three_plus_blank(blank_pos, lit, off):
@@ -859,6 +865,16 @@ def _selftest():
     check("end line reports both scores", "You got 2" in end_line(5, 2)
           and "I got 5" in end_line(5, 2) and "I won" in end_line(5, 2))
     check("end line on a loss", "I lost" in end_line(2, 5))
+
+    # pluralisation: 1 is singular, 0 and 2+ are plural
+    check("points(0) -> '0 points'", points(0) == "0 points")
+    check("points(1) -> '1 point'", points(1) == "1 point")
+    check("points(2) -> '2 points'", points(2) == "2 points")
+    check("points(5) -> '5 points'", points(5) == "5 points")
+    check("end line singular player", "You got 1 point." in end_line(5, 1))
+    check("end line singular vector", "I got 1 point." in end_line(1, 5))
+    check("end line zero player", "You got 0 points." in end_line(5, 0))
+    check("no '1 points' anywhere", "1 points" not in end_line(1, 1))
 
     frame = three_plus_blank(1, "L", "O")
     check("3 lit + 1 blank", frame == ["L", "O", "L", "L"])
