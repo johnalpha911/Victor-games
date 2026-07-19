@@ -149,6 +149,37 @@ too much. Each is a genuinely physical reaction — see
 [HARDWARE_NOTES.md](docs/HARDWARE_NOTES.md#the-wheelie) for how the wheelie
 in particular works.
 
+### `feedothers.py` — feed his friends
+
+The same charge-the-cube mechanic as `feeding.py`, but Vector isn't the one
+eating and he never moves. Grab a soft toy, tap the cube with its mouth to
+charge it up, then tap it seven more times to drain it back out — one visible
+step per tap. Vector sits and watches, reacting to each one. Then it resets
+and you can do it again with the next toy, as many times as you like.
+
+Three deliberate differences from `feeding.py`:
+
+- **He doesn't drive.** No approach, no nesting, no ToF or camera work — all
+  the physical business happens in your hands, so it works anywhere you can
+  sit him down.
+- **Unlimited rounds.** `feeding.py` has two stages and then it's over.
+  This just keeps going.
+- **The lights are always uniform.** All four corners brighten together every
+  time — there's no corner-by-corner fill stage, and a full cube is simply
+  all four solid.
+
+To stop, pet his back while the cube is sitting empty and waiting for the next
+charge. Petting him mid-charge or mid-discharge does nothing, so you can't end
+the session by accident while steadying him.
+
+```bash
+python3 feedothers.py --serial YOUR_SERIAL
+python3 feedothers.py --serial YOUR_SERIAL --green    # green cube lights, not blue
+python3 feedothers.py --serial YOUR_SERIAL --tap      # tap to charge; shake is default
+python3 feedothers.py --serial YOUR_SERIAL --taps 5   # discharge in 5 taps instead of 7
+python3 feedothers.py --selftest
+```
+
 ### `hot_potato.py` — party game, 2+ players
 
 Vector is a timer with a personality, not a referee. He doesn't know how
@@ -296,7 +327,7 @@ If you'd rather edit that file directly, an entry looks like this:
   "utterances": ["let's play keepaway", "play keepaway"],
   "intent": "intent_custom_playkeepaway",
   "exec": "path/to/python",
-  "execargs": ["path/to/script.py","--serial","!botSerial"]
+  "execargs": ["path/to/script.py", "--serial", "!botSerial"]
 }
 ```
 
