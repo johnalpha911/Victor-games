@@ -327,7 +327,7 @@ If you'd rather edit that file directly, an entry looks like this:
   "utterances": ["let's play keepaway", "play keepaway"],
   "intent": "intent_custom_playkeepaway",
   "exec": "path/to/python",
-  "execargs": ["path/to/script.py", "--serial", "!botSerial"]
+  "execargs": ["path/to/script.py","--serial","!botSerial"]
 }
 ```
 
